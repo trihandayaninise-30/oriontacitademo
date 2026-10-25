@@ -1,90 +1,57 @@
-// app.post('/api/assessments', async (req, res) => {
-//     const userEmail = req.body.companyEmail;
-    
-//     // Menggunakan key kapital sesuai standar API AI Engineer
-//     const payloadToAI = {
-//         Email: userEmail,
-//         Name: "Abdul" // Diisi default agar lolos validasi required
-//     };
-
-//     let aiResponseResult = "Menunggu respons AI...";
-//     let responseStatus = 500;
-
-//     try {
-        
-//         const apiResponse = await fetch('http://169.58.24.219:4024/send-result', {
-//             method: 'POST',
-//             headers: { 
-//                 'Content-Type': 'application/json' 
-//             },
-//             body: JSON.stringify(payloadToAI)
-//         });
-        
-//         responseStatus = apiResponse.status; // Ambil status code (misal 200, 400, dll)
-//         aiResponseResult = await apiResponse.json();
-
-//     } catch (error) {
-//         console.error("Gagal terhubung ke AI:", error.message);
-//         responseStatus = 500;
-//         aiResponseResult = { error: "Gagal terhubung ke server AI" };
-//     }
-
-    
-//     const formattedStatusAI = typeof aiResponseResult === 'object' ? JSON.stringify(aiResponseResult) : aiResponseResult;
-
-//     const assessments = readData();
-//     const newEntry = {
-//         id: Date.now(),
-//         date: new Date().toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }),
-//         companyEmail: userEmail,
-//         statusAI: formattedStatusAI
-//     };
-
-//     assessments.unshift(newEntry);
-//     writeData(assessments);
-
-//     res.status(responseStatus).json({
-//         success: responseStatus >= 200 && responseStatus < 300,
-//         status: responseStatus,
-//         message: formattedStatusAI,
-//         data: newEntry
-//     });
-// });
-
-
 const express = require('express');
-const bodyParser = require('body-parser');
+const fs = require('fs');
 const path = require('path');
-
 const app = express();
 const PORT = 3000;
 
-// --- MIDDLEWARE ---
 app.use(express.json());
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true }));
 
-// Route halaman utama
+function readData() {
+    if (!fs.existsSync('assessments.json')) {
+        fs.writeFileSync('assessments.json', JSON.stringify([]));
+    }
+    const data = fs.readFileSync('assessments.json', 'utf8');
+    try { 
+        return JSON.parse(data); 
+    } catch (e) { 
+        return []; 
+    }
+}
+
+function writeData(data) {
+    fs.writeFileSync('assessments.json', JSON.stringify(data, null, 2));
+}
+
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'demo.html'));
+    app.sendFile(path.join(__dirname, 'demo.html'));
 });
 
-// API POST untuk mengirim data ke AI Engineer / REST API
-app.post('/api/assessments', async (req, res) => {
-    const userEmail = req.body.companyEmail;
-    const nameVal = req.body.nameVal || "-"; // Menangkap nameVal dari frontend dengan fallback aman
+app.get('/api/assessments', (req, res) => {
+    res.json({ success: true, data: readData() });
+});
 
-    // Payload sesuai standar API AI Engineer (menggunakan Name dan Email)
+app.post('/api/assessments', async (req, res) => {
+    const { companyEmail, nameVal } = req.body;
+    
+    if (!companyEmail || !nameVal) {
+        return res.status(400).json({
+            success: false,
+            status: 400,
+            message: "Bad Request: Email perusahaan dan Nama wajib diisi!"
+        });
+    }
+
     const payloadToAI = {
-        Email: userEmail,
-        Name: nameVal
+        email: companyEmail,
+        name: nameVal
     };
 
-    let aiResponseResult = "Menunggu respons AI...";
     let responseStatus = 500;
+    let responseMessage = "Server Error: Terjadi kesalahan pada server.";
 
     try {
-       const apiResponse = await fetch('https://backend-nodegreen.oriontacita.my.id/send-result', {
+        const apiResponse = await fetch('http://169.58.24.219:4024/send-result', {
             method: 'POST',
             headers: { 
                 'Content-Type': 'application/json' 
@@ -93,37 +60,44 @@ app.post('/api/assessments', async (req, res) => {
         });
         
         responseStatus = apiResponse.status; 
-        
-        // Ambil respons teks/JSON dari REST API dengan aman
-        const responseText = await apiResponse.text();
-        try {
-            aiResponseResult = JSON.parse(responseText);
-        } catch (e) {
-            aiResponseResult = responseText;
-        }
+        const responseData = await apiResponse.json();
 
+        if (apiResponse.ok) {
+            responseStatus = 200;
+            responseMessage = "Success: Berhasil dikirim ke server AI!";
+        } else if (responseStatus === 400) {
+            responseStatus = 400;
+            responseMessage = responseData.error || "Bad Request: Permintaan ditolak oleh server eksternal.";
+        } else {
+            responseStatus = 500;
+            responseMessage = responseData.error || "Server Error pada API eksternal.";
+        }
     } catch (error) {
         console.error("Gagal terhubung ke AI:", error.message);
         responseStatus = 500;
-        aiResponseResult = { error: "Gagal terhubung ke server AI: " + error.message };
+        responseMessage = "Server Error: Gagal terhubung ke jaringan server eksternal (Fetch Failed).";
     }
 
-    // Menyesuaikan format pesan respons dengan konversi REST API
-    let errorMessage = "";
-    if (typeof aiResponseResult === 'object' && aiResponseResult !== null) {
-        errorMessage = aiResponseResult.error || aiResponseResult.message || JSON.stringify(aiResponseResult);
-    } else {
-        errorMessage = aiResponseResult;
-    }
+    const assessments = readData();
+    const newEntry = {
+        id: Date.now(),
+        date: new Date().toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+        companyEmail: companyEmail,
+        nameVal: nameVal,
+        statusAI: responseMessage
+    };
 
-    // Mengirim respons kembali ke frontend tanpa menyimpan ke file JSON log
+    assessments.unshift(newEntry);
+    writeData(assessments);
+
     res.status(responseStatus).json({
-        success: responseStatus >= 200 && responseStatus < 300,
+        success: responseStatus === 200,
         status: responseStatus,
-        message: errorMessage
+        message: responseMessage,
+        data: newEntry
     });
 });
 
 app.listen(PORT, () => {
-    console.log(`Server berjalan di http://localhost:${PORT}`);
+    console.log(`Server berjalan sempurna di http://localhost:${PORT}`);
 });
